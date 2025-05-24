@@ -19,7 +19,7 @@ void* aloca_reg(float embedding[128], const char* person_id) {
     treg* reg = malloc(sizeof(treg));
     memcpy(reg->embedding, embedding, sizeof(float) * 128);
     strncpy(reg->person_id, person_id, 99);
-    reg->person_id[99] = '\0'; // Garante terminação nula
+    reg->person_id[99] = '\0';
     return reg;
 }
 
@@ -98,20 +98,16 @@ void _kdtree_busca_knn(tarv* arv, tnode** atual, void* key, int profund,
     if (*atual != NULL) {
         double dist_atual = arv->dist((*atual)->key, key);
         
-        // Se o heap não está cheio ou esta distância é menor que a maior no heap
         if (*heap_size < k || dist_atual < heap[0].distance) {
             if (*heap_size == k) {
-                // Remove o maior elemento do heap (raiz)
                 heap[0] = heap[*heap_size - 1];
                 (*heap_size)--;
             }
             
-            // Adiciona o novo elemento ao heap
             heap[*heap_size].distance = dist_atual;
             heap[*heap_size].record = (treg*)((*atual)->key);
             (*heap_size)++;
             
-            // Reorganiza o heap
             for (int i = (*heap_size - 1) / 2; i >= 0; i--) {
                 int largest = i;
                 int left = 2 * i + 1;
@@ -194,7 +190,7 @@ void inserir_ponto(treg p) {
 }
 
 void kdtree_construir() {
-    arvore_global.k = 128;  // Agora temos 128 dimensões
+    arvore_global.k = 128;
     arvore_global.dist = distancia;
     arvore_global.cmp = comparador;
     arvore_global.raiz = NULL;
@@ -202,4 +198,55 @@ void kdtree_construir() {
 
 void buscar_n_vizinhos_proximos(tarv* arv, treg query, treg* resultados, int n) {
     kdtree_busca_knn(arv, &query, resultados, n);
+}
+
+int main() {
+    // Inicializa a árvore
+    kdtree_construir();
+    
+    printf("=== TESTE KD-TREE PARA RECONHECIMENTO FACIAL ===\n\n");
+
+    float emb1[128], emb2[128], emb3[128], query_emb[128];
+
+    for(int i = 0; i < 128; i++) {
+        emb1[i] = 0.1f + i*0.001f;  // Pessoa 1
+        emb2[i] = 0.2f + i*0.001f;  // Pessoa 2
+        emb3[i] = 0.5f + i*0.002f;  // Pessoa 3
+        query_emb[i] = 0.15f + i*0.001f; // Query
+    }
+    
+    treg registros[3];
+    
+    memcpy(registros[0].embedding, emb1, sizeof(emb1));
+    strcpy(registros[0].person_id, "funcionario_001");
+    
+    memcpy(registros[1].embedding, emb2, sizeof(emb2));
+    strcpy(registros[1].person_id, "funcionario_002");
+    
+    memcpy(registros[2].embedding, emb3, sizeof(emb3));
+    strcpy(registros[2].person_id, "funcionario_003");
+    
+    for(int i = 0; i < 3; i++) {
+        inserir_ponto(registros[i]);
+    }
+    printf("Inseridos 3 registros na arvore\n");
+    
+
+    treg query;
+    memcpy(query.embedding, query_emb, sizeof(query_emb));
+    strcpy(query.person_id, "consulta");
+
+    int k = 2;
+    treg resultados[k];
+    buscar_n_vizinhos_proximos(get_tree(), query, resultados, k);
+    
+    printf("\n%d vizinhos mais proximos:\n", k);
+    for(int i = 0; i < k; i++) {
+        double dist = sqrt(distancia(&query, &resultados[i]));
+        printf("%d: %s (distancia: %.4f)\n", i+1, resultados[i].person_id, dist);
+    }
+    
+    kdtree_destroi(get_tree());
+    
+    return 0;
 }
