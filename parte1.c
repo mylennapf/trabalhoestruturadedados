@@ -5,40 +5,16 @@
 #include <assert.h>
 #include <math.h>
 
+/* Definições principais */
 typedef struct _reg {
-    float embedding[128];  // Vetor de 128 floats
-    char person_id[100];   // ID da pessoa (100 caracteres)
+    float embedding[128];
+    char id[100];
 } treg;
 
 typedef struct {
     double distance;
     treg* record;
 } heap_item;
-
-void* aloca_reg(float embedding[128], const char* person_id) {
-    treg* reg = malloc(sizeof(treg));
-    memcpy(reg->embedding, embedding, sizeof(float) * 128);
-    strncpy(reg->person_id, person_id, 99);
-    reg->person_id[99] = '\0';
-    return reg;
-}
-
-int comparador(void* a, void* b, int pos) {
-    float* emb_a = ((treg*)a)->embedding;
-    float* emb_b = ((treg*)b)->embedding;
-    return (emb_a[pos] > emb_b[pos]) - (emb_a[pos] < emb_b[pos]);
-}
-
-double distancia(void* a, void* b) {
-    float* emb_a = ((treg*)a)->embedding;
-    float* emb_b = ((treg*)b)->embedding;
-    double sum = 0.0;
-    for (int i = 0; i < 128; i++) {
-        double diff = emb_a[i] - emb_b[i];
-        sum += diff * diff;
-    }
-    return sum;
-}
 
 typedef struct _node {
     void* key;
@@ -53,14 +29,38 @@ typedef struct _arv {
     int k;
 } tarv;
 
-void kdtree_constroi(tarv* arv, int (*cmp)(void* a, void* b, int), double (*dist)(void*, void*), int k) {
+/* Funções auxiliares */
+void* aloca_reg(float embedding[128], const char id[]) {
+    treg* reg = malloc(sizeof(treg));
+    memcpy(reg->embedding, embedding, sizeof(float) * 128);
+    strncpy(reg->id, id, 99);
+    reg->id[99] = '\0';
+    return reg;
+}
+
+int comparador(void* a, void* b, int pos) {
+    float diff = ((treg*)a)->embedding[pos] - ((treg*)b)->embedding[pos];
+    return (diff > 0) ? 1 : ((diff < 0) ? -1 : 0);
+}
+
+double distancia(void* a, void* b) {
+    double soma = 0.0;
+    for (int i = 0; i < 128; i++) {
+        double diff = ((treg*)a)->embedding[i] - ((treg*)b)->embedding[i];
+        soma += diff * diff;
+    }
+    return soma;
+}
+
+/* Funções da KD-Tree */
+void kdtree_constroi(tarv* arv, int (*cmp)(void*, void*, int), double (*dist)(void*, void*), int k) {
     arv->raiz = NULL;
     arv->cmp = cmp;
     arv->dist = dist;
     arv->k = k;
 }
 
-void _kdtree_insere(tnode** raiz, void* key, int (*cmp)(void* a, void* b, int), int profund, int k) {
+void _kdtree_insere(tnode** raiz, void* key, int (*cmp)(void*, void*, int), int profund, int k) {
     if (*raiz == NULL) {
         *raiz = malloc(sizeof(tnode));
         (*raiz)->key = key;
@@ -68,16 +68,16 @@ void _kdtree_insere(tnode** raiz, void* key, int (*cmp)(void* a, void* b, int), 
         (*raiz)->dir = NULL;
     } else {
         int pos = profund % k;
-        if (cmp((*(*raiz)).key, key, pos) < 0) {
-            _kdtree_insere(&((*(*raiz)).dir), key, cmp, profund + 1, k);
+        if (cmp((*raiz)->key, key, pos) < 0) {
+            _kdtree_insere(&(*raiz)->dir, key, cmp, profund + 1, k);
         } else {
-            _kdtree_insere(&((*raiz)->esq), key, cmp, profund + 1, k);
+            _kdtree_insere(&(*raiz)->esq, key, cmp, profund + 1, k);
         }
     }
 }
 
 void kdtree_insere(tarv* arv, void* key) {
-    _kdtree_insere(&(arv->raiz), key, arv->cmp, 0, arv->k);
+    _kdtree_insere(&arv->raiz, key, arv->cmp, 0, arv->k);
 }
 
 void _kdtree_destroi(tnode* node) {
@@ -93,6 +93,7 @@ void kdtree_destroi(tarv* arv) {
     _kdtree_destroi(arv->raiz);
 }
 
+/* Funções de busca com heap */
 void _kdtree_busca_knn(tarv* arv, tnode** atual, void* key, int profund, 
                       heap_item* heap, int* heap_size, int k) {
     if (*atual != NULL) {
@@ -177,6 +178,7 @@ void kdtree_busca_knn(tarv* arv, void* key, treg* resultados, int k) {
     free(heap);
 }
 
+/* Variáveis globais e funções de interface */
 tarv arvore_global;
 
 tarv* get_tree() {
@@ -200,14 +202,14 @@ void buscar_n_vizinhos_proximos(tarv* arv, treg query, treg* resultados, int n) 
     kdtree_busca_knn(arv, &query, resultados, n);
 }
 
-int main() {
+void test_kdtree_facial() {
     // Inicializa a árvore
     kdtree_construir();
-    
-    printf("=== TESTE KD-TREE PARA RECONHECIMENTO FACIAL ===\n\n");
-
+        
+    // Cria embeddings de exemplo
     float emb1[128], emb2[128], emb3[128], query_emb[128];
-
+    
+    // Preenche com valores de exemplo
     for(int i = 0; i < 128; i++) {
         emb1[i] = 0.1f + i*0.001f;  // Pessoa 1
         emb2[i] = 0.2f + i*0.001f;  // Pessoa 2
@@ -215,38 +217,46 @@ int main() {
         query_emb[i] = 0.15f + i*0.001f; // Query
     }
     
+    // Cria e insere registros
     treg registros[3];
     
     memcpy(registros[0].embedding, emb1, sizeof(emb1));
-    strcpy(registros[0].person_id, "funcionario_001");
+    strcpy(registros[0].id, "pessoa_001");
     
     memcpy(registros[1].embedding, emb2, sizeof(emb2));
-    strcpy(registros[1].person_id, "funcionario_002");
+    strcpy(registros[1].id, "pessoa_002");
     
     memcpy(registros[2].embedding, emb3, sizeof(emb3));
-    strcpy(registros[2].person_id, "funcionario_003");
+    strcpy(registros[2].id, "pessoa_003");
     
     for(int i = 0; i < 3; i++) {
         inserir_ponto(registros[i]);
     }
     printf("Inseridos 3 registros na arvore\n");
     
-
+    // Prepara consulta
     treg query;
     memcpy(query.embedding, query_emb, sizeof(query_emb));
-    strcpy(query.person_id, "consulta");
-
+    strcpy(query.id, "consulta");
+    
+    // Busca os 2 mais próximos
     int k = 2;
     treg resultados[k];
     buscar_n_vizinhos_proximos(get_tree(), query, resultados, k);
     
+    // Mostra resultados
     printf("\n%d vizinhos mais proximos:\n", k);
     for(int i = 0; i < k; i++) {
         double dist = sqrt(distancia(&query, &resultados[i]));
-        printf("%d: %s (distancia: %.4f)\n", i+1, resultados[i].person_id, dist);
+        printf("%d: %s (distancia: %.4f)\n", i+1, resultados[i].id, dist);
     }
     
+    // Limpeza
     kdtree_destroi(get_tree());
-    
-    return 0;
+}
+
+int main(void) {
+    test_kdtree_facial();
+    printf("\nTodos os testes passaram com sucesso!\n");
+    return EXIT_SUCCESS;
 }
