@@ -1,15 +1,18 @@
-# app.py
-from fastapi import FastAPI, Query
-from kdtree_wrapper import lib, Tarv, TReg
-from ctypes import POINTER,c_char
+from fastapi import FastAPI
 from pydantic import BaseModel
+from typing import List
+from kdtree_wrapper import lib, TReg
+import numpy as np
 
 app = FastAPI()
 
-class PontoEntrada(BaseModel):
-    lat: float
-    lon: float
-    nome: str
+class FaceEmbedding(BaseModel):
+    embedding: List[float]  # 128 floats
+    person_id: str          # ID da pessoa
+
+class FaceQuery(BaseModel):
+    embedding: List[float]  # 128 floats para consulta
+    k: int = 1              # Número de vizinhos a retornar
 
 @app.post("/construir-arvore")
 def constroi_arvore():
@@ -17,21 +20,43 @@ def constroi_arvore():
     return {"mensagem": "Árvore KD inicializada com sucesso."}
 
 @app.post("/inserir")
-def inserir(ponto: PontoEntrada):
-    nome_bytes = ponto.nome.encode('utf-8')[:99]  # Trunca se necessário
-    novo_ponto = TReg(lat=ponto.lat, lon=ponto.lon, nome=nome_bytes)
-    lib.inserir_ponto(novo_ponto)
-    return {"mensagem": f"Ponto '{ponto.nome}' inserido com sucesso."}
+def inserir(face: FaceEmbedding):
+    # Converte o embedding para o formato C
+    embedding_array = (ctypes.c_float * 128)(*face.embedding)
+    
+    # Cria o registro
+    novo_registro = TReg()
+    novo_registro.embedding = embedding_array
+    novo_registro.person_id = face.person_id.encode('utf-8')[:99]
+    
+    # Insere na árvore
+    lib.inserir_ponto(novo_registro)
+    
+    return {"mensagem": f"Embedding de '{face.person_id}' inserido com sucesso."}
 
-@app.get("/buscar")
-def buscar(lat: float = Query(...), lon: float = Query(...)):
-    query = TReg(lat=lat, lon=lon)
-
-    arv = lib.get_tree()  # Suponha que esta função retorne ponteiro para árvore já construída
-    resultado = lib.buscar_mais_proximo(arv, query)
-
-    return {
-        "lat": resultado.lat,
-        "lon": resultado.lon,
-        "nome": resultado.nome
-    }
+@app.post("/buscar")
+def buscar(query: FaceQuery):
+    # Prepara a query
+    query_embedding = (ctypes.c_float * 128)(*query.embedding)
+    query_reg = TReg()
+    query_reg.embedding = query_embedding
+    
+    # Prepara o array de resultados
+    resultados = (TReg * query.k)()
+    
+    # Executa a busca
+    arv = lib.get_tree()
+    lib.buscar_n_vizinhos_proximos(arv, query_reg, resultados, query.k)
+    
+    # Converte os resultados para o formato Python
+    resultados_python = []
+    for i in range(query.k):
+        if resultados[i].person_id:  # Verifica se há resultado
+            embedding = [float(resultados[i].embedding[j]) for j in range(128)]
+            person_id = resultados[i].person_id.decode('utf-8')
+            resultados_python.append({
+                "embedding": embedding,
+                "person_id": person_id
+            })
+    
+    return {"resultados": resultados_python}
