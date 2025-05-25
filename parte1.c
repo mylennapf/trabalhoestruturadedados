@@ -5,51 +5,160 @@
 #include <assert.h>
 #include <math.h>
 
-/* Definições principais */
-typedef struct _reg {
-    float embedding[128];
-    char id[100];
+/* 1º - Estrutura para embeddings faciais */
+typedef struct {
+    float embedding[128];  // Vetor de 128 floats
+    char person_id[100];   // ID com 100 caracteres
 } treg;
 
-typedef struct {
-    double distance;
-    treg* record;
-} heap_item;
-
+/* Estrutura do nó da KD-Tree */
 typedef struct _node {
     void* key;
     struct _node* esq;
     struct _node* dir;
 } tnode;
 
-typedef struct _arv {
+typedef struct {
     tnode* raiz;
     int (*cmp)(void*, void*, int);
     double (*dist)(void*, void*);
     int k;
 } tarv;
 
+/* 2º - Função de distância euclidiana quadrada */
+double distancia(void* a, void* b) {
+    float* emb_a = ((treg*)a)->embedding;
+    float* emb_b = ((treg*)b)->embedding;
+    double sum = 0.0;
+    for (int i = 0; i < 128; i++) {
+        double diff = emb_a[i] - emb_b[i];
+        sum += diff * diff;
+    }
+    return sum;
+}
+
 /* Funções auxiliares */
-void* aloca_reg(float embedding[128], const char id[]) {
+void* aloca_reg(float embedding[128], const char* person_id) {
     treg* reg = malloc(sizeof(treg));
     memcpy(reg->embedding, embedding, sizeof(float) * 128);
-    strncpy(reg->id, id, 99);
-    reg->id[99] = '\0';
+    strncpy(reg->person_id, person_id, 99);
+    reg->person_id[99] = '\0';
     return reg;
 }
 
 int comparador(void* a, void* b, int pos) {
-    float diff = ((treg*)a)->embedding[pos] - ((treg*)b)->embedding[pos];
-    return (diff > 0) ? 1 : ((diff < 0) ? -1 : 0);
+    float* emb_a = ((treg*)a)->embedding;
+    float* emb_b = ((treg*)b)->embedding;
+    return (emb_a[pos] > emb_b[pos]) - (emb_a[pos] < emb_b[pos]);
 }
 
-double distancia(void* a, void* b) {
-    double soma = 0.0;
-    for (int i = 0; i < 128; i++) {
-        double diff = ((treg*)a)->embedding[i] - ((treg*)b)->embedding[i];
-        soma += diff * diff;
+/* 8º - Implementação do MinHeap integrado */
+typedef struct {
+    double distance;
+    treg* record;
+} HeapItem;
+
+typedef struct {
+    HeapItem* items;
+    int capacity;
+    int size;
+} MinHeap;
+
+MinHeap* criar_minheap(int capacity) {
+    MinHeap* heap = malloc(sizeof(MinHeap));
+    heap->items = malloc(sizeof(HeapItem) * capacity);
+    heap->capacity = capacity;
+    heap->size = 0;
+    return heap;
+}
+
+void liberar_minheap(MinHeap* heap) {
+    free(heap->items);
+    free(heap);
+}
+
+void heapify_up(MinHeap* heap, int index) {
+    while (index > 0) {
+        int parent = (index - 1) / 2;
+        if (heap->items[index].distance < heap->items[parent].distance) {
+            HeapItem temp = heap->items[index];
+            heap->items[index] = heap->items[parent];
+            heap->items[parent] = temp;
+            index = parent;
+        } else {
+            break;
+        }
     }
-    return soma;
+}
+
+void heapify_down(MinHeap* heap, int index) {
+    while (1) {
+        int left = 2 * index + 1;
+        int right = 2 * index + 2;
+        int smallest = index;
+        
+        if (left < heap->size && heap->items[left].distance < heap->items[smallest].distance) {
+            smallest = left;
+        }
+        if (right < heap->size && heap->items[right].distance < heap->items[smallest].distance) {
+            smallest = right;
+        }
+        
+        if (smallest != index) {
+            HeapItem temp = heap->items[index];
+            heap->items[index] = heap->items[smallest];
+            heap->items[smallest] = temp;
+            index = smallest;
+        } else {
+            break;
+        }
+    }
+}
+
+void inserir_heap(MinHeap* heap, double distance, treg* record) {
+    if (heap->size < heap->capacity) {
+        heap->items[heap->size].distance = distance;
+        heap->items[heap->size].record = record;
+        heapify_up(heap, heap->size);
+        heap->size++;
+    } else if (distance < heap->items[0].distance) {
+        heap->items[0].distance = distance;
+        heap->items[0].record = record;
+        heapify_down(heap, 0);
+    }
+}
+
+/* 3º - Função de busca com MinHeap integrado */
+void _kdtree_busca_knn(tarv* arv, tnode* atual, void* key, int profund, MinHeap* heap) {
+    if (atual != NULL) {
+        double dist_atual = arv->dist(atual->key, key);
+        inserir_heap(heap, dist_atual, (treg*)atual->key);
+        
+        int pos = profund % arv->k;
+        int comp = arv->cmp(key, atual->key, pos);
+        
+        tnode* lado_principal = comp < 0 ? atual->esq : atual->dir;
+        tnode* lado_oposto = comp < 0 ? atual->dir : atual->esq;
+        
+        _kdtree_busca_knn(arv, lado_principal, key, profund + 1, heap);
+        
+        double axis_diff = ((treg*)key)->embedding[pos] - ((treg*)atual->key)->embedding[pos];
+        if (heap->size < heap->capacity || axis_diff * axis_diff < heap->items[0].distance) {
+            _kdtree_busca_knn(arv, lado_oposto, key, profund + 1, heap);
+        }
+    }
+}
+
+void kdtree_busca_knn(tarv* arv, void* key, treg* resultados, int k) {
+    MinHeap* heap = criar_minheap(k);
+    _kdtree_busca_knn(arv, arv->raiz, key, 0, heap);
+    
+    // Extrai os resultados em ordem crescente
+    for (int i = 0; i < heap->size; i++) {
+        memcpy(&resultados[i], heap->items[i].record, sizeof(treg));
+    }
+    
+    liberar_minheap(heap);
 }
 
 /* Funções da KD-Tree */
@@ -93,105 +202,15 @@ void kdtree_destroi(tarv* arv) {
     _kdtree_destroi(arv->raiz);
 }
 
-/* Funções de busca com heap */
-void _kdtree_busca_knn(tarv* arv, tnode** atual, void* key, int profund, 
-                      heap_item* heap, int* heap_size, int k) {
-    if (*atual != NULL) {
-        double dist_atual = arv->dist((*atual)->key, key);
-        
-        if (*heap_size < k || dist_atual < heap[0].distance) {
-            if (*heap_size == k) {
-                heap[0] = heap[*heap_size - 1];
-                (*heap_size)--;
-            }
-            
-            heap[*heap_size].distance = dist_atual;
-            heap[*heap_size].record = (treg*)((*atual)->key);
-            (*heap_size)++;
-            
-            for (int i = (*heap_size - 1) / 2; i >= 0; i--) {
-                int largest = i;
-                int left = 2 * i + 1;
-                int right = 2 * i + 2;
-                
-                if (left < *heap_size && heap[left].distance > heap[largest].distance)
-                    largest = left;
-                if (right < *heap_size && heap[right].distance > heap[largest].distance)
-                    largest = right;
-                
-                if (largest != i) {
-                    heap_item temp = heap[i];
-                    heap[i] = heap[largest];
-                    heap[largest] = temp;
-                }
-            }
-        }
-        
-        int pos = profund % arv->k;
-        int comp = arv->cmp(key, (*atual)->key, pos);
-        
-        tnode** lado_principal = (comp < 0) ? &((*atual)->esq) : &((*atual)->dir);
-        tnode** lado_oposto = (comp < 0) ? &((*atual)->dir) : &((*atual)->esq);
-        
-        _kdtree_busca_knn(arv, lado_principal, key, profund + 1, heap, heap_size, k);
-        
-        double axis_diff = ((treg*)key)->embedding[pos] - ((treg*)((*atual)->key))->embedding[pos];
-        if (*heap_size < k || axis_diff * axis_diff < heap[0].distance) {
-            _kdtree_busca_knn(arv, lado_oposto, key, profund + 1, heap, heap_size, k);
-        }
-    }
-}
-
-void kdtree_busca_knn(tarv* arv, void* key, treg* resultados, int k) {
-    heap_item* heap = malloc(k * sizeof(heap_item));
-    int heap_size = 0;
-    
-    _kdtree_busca_knn(arv, &(arv->raiz), key, 0, heap, &heap_size, k);
-    
-    for (int i = heap_size - 1; i > 0; i--) {
-        heap_item temp = heap[0];
-        heap[0] = heap[i];
-        heap[i] = temp;
-        
-        for (int j = (i - 1) / 2; j >= 0; j--) {
-            int largest = j;
-            int left = 2 * j + 1;
-            int right = 2 * j + 2;
-            
-            if (left < i && heap[left].distance > heap[largest].distance)
-                largest = left;
-            if (right < i && heap[right].distance > heap[largest].distance)
-                largest = right;
-                
-            if (largest != j) {
-                heap_item temp = heap[j];
-                heap[j] = heap[largest];
-                heap[largest] = temp;
-            }
-        }
-    }
-    
-    for (int i = 0; i < heap_size; i++) {
-        memcpy(&resultados[i], heap[i].record, sizeof(treg));
-    }
-    
-    free(heap);
-}
-
-/* Variáveis globais e funções de interface */
+/* 5º - Variável global e funções de interface */
 tarv arvore_global;
 
-tarv* get_tree() {
-    return &arvore_global;
-}
-
 void inserir_ponto(treg p) {
-    treg* novo = malloc(sizeof(treg));
-    *novo = p;
+    treg* novo = aloca_reg(p.embedding, p.person_id);
     kdtree_insere(&arvore_global, novo);
 }
 
-void kdtree_construir() {
+void kdtree_construir_global() {
     arvore_global.k = 128;
     arvore_global.dist = distancia;
     arvore_global.cmp = comparador;
@@ -203,13 +222,12 @@ void buscar_n_vizinhos_proximos(tarv* arv, treg query, treg* resultados, int n) 
 }
 
 void test_kdtree_facial() {
-    // Inicializa a árvore
-    kdtree_construir();
-        
-    // Cria embeddings de exemplo
+    kdtree_construir_global();
+    
+    printf("=== TESTE KD-TREE COM MINHEAP INTEGRADO ===\n\n");
+    
     float emb1[128], emb2[128], emb3[128], query_emb[128];
     
-    // Preenche com valores de exemplo
     for(int i = 0; i < 128; i++) {
         emb1[i] = 0.1f + i*0.001f;  // Pessoa 1
         emb2[i] = 0.2f + i*0.001f;  // Pessoa 2
@@ -217,46 +235,42 @@ void test_kdtree_facial() {
         query_emb[i] = 0.15f + i*0.001f; // Query
     }
     
-    // Cria e insere registros
+
     treg registros[3];
     
     memcpy(registros[0].embedding, emb1, sizeof(emb1));
-    strcpy(registros[0].id, "pessoa_001");
+    strcpy(registros[0].person_id, "usuario_001");
     
     memcpy(registros[1].embedding, emb2, sizeof(emb2));
-    strcpy(registros[1].id, "pessoa_002");
+    strcpy(registros[1].person_id, "usuario_002");
     
     memcpy(registros[2].embedding, emb3, sizeof(emb3));
-    strcpy(registros[2].id, "pessoa_003");
+    strcpy(registros[2].person_id, "usuario_003");
     
     for(int i = 0; i < 3; i++) {
         inserir_ponto(registros[i]);
     }
-    printf("Inseridos 3 registros na arvore\n");
+    printf("Registros inseridos: 3\n");
     
-    // Prepara consulta
     treg query;
     memcpy(query.embedding, query_emb, sizeof(query_emb));
-    strcpy(query.id, "consulta");
+    strcpy(query.person_id, "consulta");
     
-    // Busca os 2 mais próximos
     int k = 2;
     treg resultados[k];
-    buscar_n_vizinhos_proximos(get_tree(), query, resultados, k);
-    
-    // Mostra resultados
+    buscar_n_vizinhos_proximos(&arvore_global, query, resultados, k);
+
     printf("\n%d vizinhos mais proximos:\n", k);
     for(int i = 0; i < k; i++) {
         double dist = sqrt(distancia(&query, &resultados[i]));
-        printf("%d: %s (distancia: %.4f)\n", i+1, resultados[i].id, dist);
+        printf("%d: %s (distancia: %.4f)\n", i+1, resultados[i].person_id, dist);
     }
     
-    // Limpeza
-    kdtree_destroi(get_tree());
+    kdtree_destroi(&arvore_global);
 }
 
-int main(void) {
+int main() {
     test_kdtree_facial();
-    printf("\nTodos os testes passaram com sucesso!\n");
-    return EXIT_SUCCESS;
+    printf("\nTeste concluido com sucesso!\n");
+    return 0;
 }
