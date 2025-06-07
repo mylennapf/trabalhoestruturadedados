@@ -1,62 +1,68 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
+import ctypes
 from typing import List
-from kdtree_wrapper import lib, TReg
-import numpy as np
 
 app = FastAPI()
 
+# Estruturas compatíveis com a biblioteca C
+class TReg(ctypes.Structure):
+    _fields_ = [("embedding", ctypes.c_float * 128),
+                ("person_id", ctypes.c_char * 100)]
+
+class Tarv(ctypes.Structure):
+    _fields_ = [("raiz", ctypes.c_void_p),
+                ("cmp", ctypes.c_void_p),
+                ("dist", ctypes.c_void_p),
+                ("k", ctypes.c_int)]
+
+# Carrega a biblioteca compartilhada
+lib = ctypes.CDLL('./kdtree.so')
+
+# Configura os tipos de retorno e parâmetros
+lib.kdtree_construir.restype = None
+lib.inserir_ponto.argtypes = [TReg]
+lib.buscar_n_vizinhos_proximos.argtypes = [ctypes.POINTER(Tarv), TReg, ctypes.POINTER(TReg), ctypes.c_int]
+lib.buscar_n_vizinhos_proximos.restype = None
+
+# Modelos Pydantic
 class FaceEmbedding(BaseModel):
-    embedding: List[float]  # 128 floats
-    person_id: str          # ID da pessoa
+    embedding: List[float]
+    person_id: str
 
 class FaceQuery(BaseModel):
-    embedding: List[float]  # 128 floats para consulta
-    k: int = 1              # Número de vizinhos a retornar
+    embedding: List[float]
+    k: int = 1
 
 @app.post("/construir-arvore")
-def constroi_arvore():
+def construir_arvore():
     lib.kdtree_construir()
-    return {"mensagem": "Árvore KD inicializada com sucesso."}
+    return {"status": "Árvore construída"}
 
 @app.post("/inserir")
 def inserir(face: FaceEmbedding):
-    # Converte o embedding para o formato C
-    embedding_array = (ctypes.c_float * 128)(*face.embedding)
-    
-    # Cria o registro
-    novo_registro = TReg()
-    novo_registro.embedding = embedding_array
-    novo_registro.person_id = face.person_id.encode('utf-8')[:99]
-    
-    # Insere na árvore
-    lib.inserir_ponto(novo_registro)
-    
-    return {"mensagem": f"Embedding de '{face.person_id}' inserido com sucesso."}
+    registro = TReg()
+    registro.embedding = (ctypes.c_float * 128)(*face.embedding)
+    registro.person_id = face.person_id.encode('utf-8')
+    lib.inserir_ponto(registro)
+    return {"status": "Face inserida"}
 
 @app.post("/buscar")
 def buscar(query: FaceQuery):
-    # Prepara a query
-    query_embedding = (ctypes.c_float * 128)(*query.embedding)
     query_reg = TReg()
-    query_reg.embedding = query_embedding
+    query_reg.embedding = (ctypes.c_float * 128)(*query.embedding)
     
-    # Prepara o array de resultados
     resultados = (TReg * query.k)()
+    arvore = Tarv()
     
-    # Executa a busca
-    arv = lib.get_tree()
-    lib.buscar_n_vizinhos_proximos(arv, query_reg, resultados, query.k)
+    lib.buscar_n_vizinhos_proximos(ctypes.byref(arvore), query_reg, resultados, query.k)
     
-    # Converte os resultados para o formato Python
-    resultados_python = []
+    output = []
     for i in range(query.k):
-        if resultados[i].person_id:  # Verifica se há resultado
-            embedding = [float(resultados[i].embedding[j]) for j in range(128)]
-            person_id = resultados[i].person_id.decode('utf-8')
-            resultados_python.append({
-                "embedding": embedding,
-                "person_id": person_id
+        if resultados[i].person_id:
+            output.append({
+                "person_id": resultados[i].person_id.decode('utf-8'),
+                "embedding": list(resultados[i].embedding)
             })
     
-    return {"resultados": resultados_python}
+    return {"resultados": output}
